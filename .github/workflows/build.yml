@@ -1,0 +1,103 @@
+name: Build and test Wasal
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: [.github/workflows/build.yml]
+permissions:
+  contents: read
+concurrency:
+  group: wasal-build
+  cancel-in-progress: false
+jobs:
+  build:
+    if: github.repository == 'ahmed9461/Wasal-Build' && github.ref == 'refs/heads/main' && github.actor == 'ahmed9461'
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: wasal
+          POSTGRES_PASSWORD: synthetic-ci-password
+          POSTGRES_DB: wasal_test
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U wasal -d wasal_test"
+          --health-interval 5s --health-timeout 5s --health-retries 15
+    steps:
+      - name: Read private source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          repository: ahmed9461/Wasal
+          ref: main
+          ssh-key: ${{ secrets.WASAL_SOURCE_KEY }}
+          persist-credentials: false
+      - name: Set up Node
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: '24'
+      - name: Build and test backend
+        env:
+          TEST_DATABASE_URL: postgresql://wasal:synthetic-ci-password@127.0.0.1:5432/wasal_test
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd backend
+          if ! npm ci --ignore-scripts > "$RUNNER_TEMP/wasal-backend.log" 2>&1; then
+            echo 'Backend dependency installation failed; reproduce using the private checkout.'
+            exit 1
+          fi
+          if ! npm test >> "$RUNNER_TEMP/wasal-backend.log" 2>&1; then
+            echo 'Backend verification failed; detailed output is kept out of public logs.'
+            grep -E '^# (tests|pass|fail|cancelled|duration_ms)' "$RUNNER_TEMP/wasal-backend.log" || true
+            exit 1
+          fi
+          if ! npm audit --omit=dev --audit-level=low >> "$RUNNER_TEMP/wasal-backend.log" 2>&1; then
+            echo 'Dependency audit failed.'
+            exit 1
+          fi
+          grep -E '^# (tests|pass|fail|duration_ms)' "$RUNNER_TEMP/wasal-backend.log" || true
+      - name: Set up Java
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Build signed Android release and run lint
+        env:
+          WASAL_KEYSTORE_B64: ${{ secrets.WASAL_KEYSTORE_B64 }}
+          WASAL_KEYSTORE_PASSWORD: ${{ secrets.WASAL_KEYSTORE_PASSWORD }}
+          WASAL_KEY_PASSWORD: ${{ secrets.WASAL_KEYSTORE_PASSWORD }}
+          WASAL_KEY_ALIAS: wasal
+          WASAL_KEYSTORE_PATH: ${{ runner.temp }}/wasal.p12
+        shell: bash
+        run: |
+          set -euo pipefail
+          trap 'rm -f "$WASAL_KEYSTORE_PATH"' EXIT
+          printf '%s' "$WASAL_KEYSTORE_B64" | base64 --decode > "$WASAL_KEYSTORE_PATH"
+          chmod 600 "$WASAL_KEYSTORE_PATH"
+          cd android
+          chmod +x gradlew
+          if ! ./gradlew --no-daemon :app:assembleRelease :app:lintRelease > "$RUNNER_TEMP/wasal-android.log" 2>&1; then
+            echo 'Android verification failed; detailed output is kept out of public logs.'
+            exit 1
+          fi
+          mkdir -p "$GITHUB_WORKSPACE/release"
+          cp app/build/outputs/apk/release/app-release.apk "$GITHUB_WORKSPACE/release/Wasal-0.2.0-rc1.apk"
+          cd "$GITHUB_WORKSPACE/release"
+          sha256sum *.apk > SHA256SUMS.txt
+      - name: Publish verified APK artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: Wasal-0.2.0-rc1
+          path: release/
+          retention-days: 30
+          if-no-files-found: error
+      - name: Record source revision
+        shell: bash
+        run: |
+          printf 'Private source revision: `%s`\n\nSynthetic SMTP tests passed; live inbox delivery requires separate acceptance.\n' "$(git rev-parse HEAD)" >> "$GITHUB_STEP_SUMMARY"
+      - name: Remove temporary diagnostics
+        if: always()
+        shell: bash
+        run: rm -f "$RUNNER_TEMP/wasal-backend.log" "$RUNNER_TEMP/wasal-android.log" "$RUNNER_TEMP/wasal.p12"
