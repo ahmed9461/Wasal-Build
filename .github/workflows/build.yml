@@ -66,6 +66,7 @@ jobs:
       - name: Build signed Android release and run lint
         env:
           WASAL_KEYSTORE_B64: ${{ secrets.WASAL_KEYSTORE_B64 }}
+          WASAL_GOOGLE_SERVICES_B64: ${{ secrets.WASAL_GOOGLE_SERVICES_B64 }}
           WASAL_KEYSTORE_PASSWORD: ${{ secrets.WASAL_KEYSTORE_PASSWORD }}
           WASAL_KEY_PASSWORD: ${{ secrets.WASAL_KEYSTORE_PASSWORD }}
           WASAL_KEY_ALIAS: wasal
@@ -73,9 +74,11 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          trap 'rm -f "$WASAL_KEYSTORE_PATH"' EXIT
+          trap 'rm -f "$WASAL_KEYSTORE_PATH" "$GITHUB_WORKSPACE/android/app/google-services.json"' EXIT
           printf '%s' "$WASAL_KEYSTORE_B64" | base64 --decode > "$WASAL_KEYSTORE_PATH"
           chmod 600 "$WASAL_KEYSTORE_PATH"
+          printf '%s' "$WASAL_GOOGLE_SERVICES_B64" | base64 --decode > android/app/google-services.json
+          chmod 600 android/app/google-services.json
           cd android
           chmod +x gradlew
           if ! ./gradlew --no-daemon :app:assembleRelease :app:lintRelease > "$RUNNER_TEMP/wasal-android.log" 2>&1; then
@@ -83,7 +86,7 @@ jobs:
             exit 1
           fi
           mkdir -p "$GITHUB_WORKSPACE/release"
-          cp app/build/outputs/apk/release/app-release.apk "$GITHUB_WORKSPACE/release/Wasal-0.2.0-rc1.apk"
+          cp app/build/outputs/apk/release/app-release.apk "$GITHUB_WORKSPACE/release/Wasal-0.3.0-rc1.apk"
           signer=$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -1)
           fingerprint=$("$signer" verify --print-certs app/build/outputs/apk/release/app-release.apk | awk '/certificate SHA-256 digest:/ {print $NF; exit}')
           test "$fingerprint" = '4ca38940e391a183c540aed14e26b7648b12d29d79113b6c6db17e36eb758a8d'
@@ -92,7 +95,7 @@ jobs:
       - name: Publish verified APK artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: Wasal-0.2.0-rc1
+          name: Wasal-0.3.0-rc1
           path: release/
           retention-days: 30
           if-no-files-found: error
