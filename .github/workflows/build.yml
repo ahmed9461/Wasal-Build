@@ -30,7 +30,7 @@ jobs:
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
         with:
           repository: ahmed9461/Wasal
-          ref: 9f2b62699df5fdc50fc9eb656b9d28aaa93950d8
+          ref: 45df49b0d56f9caadabf252a5b44d22163fd98d3
           ssh-key: ${{ secrets.WASAL_SOURCE_KEY }}
           persist-credentials: false
       - name: Set up Node
